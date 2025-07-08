@@ -40,20 +40,20 @@ class RESTPGTrainer:
     def load_model(self, model_name): 
         print(f"Loading model: {model_name}")
         
-        # # Check GPU availability
-        # if torch.cuda.is_available():
-        #     print(f"Using GPU: {torch.cuda.get_device_name()}")
-        #     device = "cuda"
-        # else:
-        #     print("GPU not available, using CPU")
-        #     device = "cpu"
+        # Check GPU availability
+        if torch.cuda.is_available():
+            print(f"Using GPU: {torch.cuda.get_device_name()}")
+            device = "cuda"
+        else:
+            print("GPU not available, using CPU")
+            device = "cpu"
         
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16,
-            device_map="auto" 
+            torch_dtype=torch.float16
         )
+        model.to(device)
         # # Add padding token if not present
         # if tokenizer.pad_token is None:  # type: ignore
         #     tokenizer.pad_token = tokenizer.eos_token  # type: ignore
@@ -136,6 +136,9 @@ class RESTPGTrainer:
         assert self.peft_model is not None, "LoRA model must be loaded before training"
         assert self.tokenizer is not None, "Tokenizer must be loaded before training"
         
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
         # Check GPU availability
         if torch.cuda.is_available():
             print(f"Training on GPU: {torch.cuda.get_device_name()}")
@@ -295,7 +298,7 @@ class RESTPGTrainer:
         
         # Stage 1: Generate reasoning dataset
         reasoning_data_path = f"{output_dir}/reasoning_data.jsonl"
-        self.generate_reasoning_dataset(train_path, reasoning_data_path)
+        # self.generate_reasoning_dataset(train_path, reasoning_data_path)
         
         # Stage 2: Supervised fine-tuning on reasoning data
         self.supervised_fine_tuning(reasoning_data_path, val_path, f"{output_dir}/sft")
@@ -408,7 +411,7 @@ def main():
     trainer = RESTPGTrainer()
     
     # Load model
-    trainer.load_model(args.model_name)
+    # trainer.load_model(args.model_name)
     
     # Train
     trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir)
