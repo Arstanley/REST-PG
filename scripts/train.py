@@ -27,6 +27,8 @@ def main():
                        help="Path to test data JSONL file")
     parser.add_argument("--output_dir", type=str, default="outputs",
                        help="Output directory for models and results")
+    parser.add_argument("--dataset_name", type=str, default="default",
+                       help="Dataset name for organizing models (default: default)")
     parser.add_argument("--model_name", type=str, default=None,
                        help="Model name to use (default: from config)")
     parser.add_argument("--seed", type=int, default=42,
@@ -39,6 +41,9 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     config.seed = args.seed
+    
+    # Set dataset name
+    config.dataset_name = args.dataset_name
     
     # Create output directory
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
@@ -87,7 +92,7 @@ def main():
     
     # Train REST-PG
     print("Starting REST-PG training...")
-    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir)
+    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir, args.dataset_name)
     
     # Evaluate
     print("Evaluating model...")

@@ -86,6 +86,45 @@ python scripts/train.py \
 
 The training script automatically evaluates the model and saves results to `outputs/experiment_1/evaluation_results.json`.
 
+### 4. Multi-Dataset Training
+
+For training on multiple datasets, the system now supports dataset-specific model organization to prevent model confusion:
+
+```bash
+# Train on first dataset
+python scripts/train.py \
+    --train_path data/amazon_train.jsonl \
+    --val_path data/amazon_val.jsonl \
+    --test_path data/amazon_test.jsonl \
+    --dataset_name amazon \
+    --output_dir outputs
+
+# Train on second dataset  
+python scripts/train.py \
+    --train_path data/yelp_train.jsonl \
+    --val_path data/yelp_val.jsonl \
+    --test_path data/yelp_test.jsonl \
+    --dataset_name yelp \
+    --output_dir outputs
+```
+
+This creates separate model directories:
+- `outputs/amazon/` - Amazon dataset models
+- `outputs/yelp/` - Yelp dataset models
+
+For batch training on multiple datasets, use the example script:
+
+```bash
+python example_multi_dataset_training.py \
+    --datasets amazon yelp \
+    --train_paths data/amazon_train.jsonl data/yelp_train.jsonl \
+    --val_paths data/amazon_val.jsonl data/yelp_val.jsonl \
+    --test_paths data/amazon_test.jsonl data/yelp_test.jsonl \
+    --output_dir outputs
+```
+
+See `DATASET_ORGANIZATION.md` for detailed documentation on this feature.
+
 ## Configuration
 
 The implementation uses a comprehensive configuration system in `src/config.py`. Key parameters include:
@@ -177,4 +216,4 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.

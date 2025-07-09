@@ -108,6 +108,7 @@ class Config:
     save_steps: int = 1000
     eval_steps: int = 1000
     logging_steps: int = 100
+    dataset_name: str = "default"  # Dataset name for model organization
     
     # Wandb settings
     use_wandb: bool = False

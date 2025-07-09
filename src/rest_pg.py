@@ -28,6 +28,7 @@ import numpy as np
 from pathlib import Path
 import random
 from datasets import Dataset
+import os
 
 from config import config
 from data_utils import ReasoningDataGenerator, calculate_rouge_reward, load_json_data, save_jsonl_data, create_dataset, create_reasoning_dataset, save_dataset_to_jsonl, validate_reasoning_data
@@ -152,11 +153,11 @@ class RESTPGTrainer:
         torch.cuda.empty_cache()
         print("Cleaned up models from GPU memory")
 
-    def expectation_step(self, data_path: str, output_dir: str = None, iteration: int = None) -> List[Dict]:
+    def expectation_step(self, data_path: str, output_dir: str = None, iteration: int = None, dataset_name: str = None) -> List[Dict]:
         """Expectation step: Generate multiple outputs for each input using the last tuned model"""
         
         if output_dir is not None:
-            if not self._load_most_recent_model(output_dir, iteration):
+            if not self._load_most_recent_model(output_dir, dataset_name, iteration):
                 print("Warning: No tuned model found.")
         else:
             print("No output_dir provided, using original model for generation")
@@ -206,9 +207,13 @@ class RESTPGTrainer:
         
         return generated_data
     
-    def maximization_step(self, generated_data: List[Dict], output_dir: str, iteration: int=0):
+    def maximization_step(self, generated_data: List[Dict], output_dir: str, iteration: int=0, dataset_name: str = None):
         """Maximization step: Train model on high-reward outputs using LoRA with Hugging Face datasets"""
         print("Maximization step: Training on high-reward outputs with LoRA using Hugging Face datasets...")
+        
+        # Set dataset name from config if not provided
+        if dataset_name is None:
+            dataset_name = config.dataset_name
         
         # Load the previously tuned model if it exists
         if iteration > 0:
@@ -314,18 +319,25 @@ class RESTPGTrainer:
         
         print(f"Maximization step completed. LoRA weights updated.")
         
-    def train_rest_pg(self, train_path: str, val_path: str, output_dir: str, skip_reasoning_generation: bool = False):
+    def train_rest_pg(self, train_path: str, val_path: str, output_dir: str, dataset_name: str = None, skip_reasoning_generation: bool = False):
         """Complete REST-PG training pipeline"""
         print("Starting REST-PG training pipeline...")
         
-        # Stage 1: Generate reasoning dataset (skip if already exists)
-        reasoning_data_path = f"{output_dir}/reasoning_data.jsonl"
+        # Set dataset name from config if not provided
+        if dataset_name is None:
+            dataset_name = config.dataset_name
         
-        if skip_reasoning_generation:
-            print("Skipping reasoning generation - using existing reasoning data")
-            if not Path(reasoning_data_path).exists():
-                raise FileNotFoundError(f"Reasoning data not found at {reasoning_data_path}. Set skip_reasoning_generation=False to generate it.")
-            
+        # Create dataset-specific output directory
+        dataset_output_dir = f"{output_dir}/{dataset_name}"
+        os.makedirs(dataset_output_dir, exist_ok=True)
+        
+        print(f"Using dataset-specific output directory: {dataset_output_dir}")
+        
+        # Stage 1: Generate reasoning dataset (if needed)
+        reasoning_data_path = f"{dataset_output_dir}/reasoning_data.jsonl"
+        
+        if skip_reasoning_generation and os.path.exists(reasoning_data_path):
+            print("Using existing reasoning data...")
             # Validate the existing reasoning data
             if not validate_reasoning_data(reasoning_data_path):
                 raise ValueError(f"Invalid reasoning data format at {reasoning_data_path}")
@@ -335,20 +347,20 @@ class RESTPGTrainer:
         
         # Stage 2: Supervised fine-tuning on reasoning data
         print("Stage 2: Supervised fine-tuning on reasoning data...")
-        self.supervised_fine_tuning(reasoning_data_path, val_path, f"{output_dir}/sft")
+        self.supervised_fine_tuning(reasoning_data_path, val_path, f"{dataset_output_dir}/sft")
         
         # Stage 3: Expectation-Maximization self-training
         for iteration in range(config.restpg.num_iterations):
             print(f"\nIteration {iteration + 1}/{config.restpg.num_iterations}")
             
             # Expectation step
-            generated_data = self.expectation_step(train_path, output_dir, iteration + 1)
+            generated_data = self.expectation_step(train_path, dataset_output_dir, iteration + 1, dataset_name)
             
             # Maximization step
-            self.maximization_step(generated_data, output_dir, iteration + 1)
+            self.maximization_step(generated_data, dataset_output_dir, iteration + 1, dataset_name)
             
-            # Save checkpoint
-            checkpoint_dir = f"{output_dir}/iteration_{iteration + 1}"
+            # Save checkpoint with dataset name
+            checkpoint_dir = f"{dataset_output_dir}/iteration_{iteration + 1}"
             self.model.save_pretrained(checkpoint_dir)
             self.tokenizer.save_pretrained(checkpoint_dir)
             
@@ -358,23 +370,30 @@ class RESTPGTrainer:
 
         self._cleanup_model()
     
-    def _load_most_recent_model(self, output_dir: str, iteration: int = None):
+    def _load_most_recent_model(self, output_dir: str, dataset_name: str = None, iteration: int = None):
         """Load the most recent model checkpoint"""
+        # Set dataset name from config if not provided
+        if dataset_name is None:
+            dataset_name = config.dataset_name
+        
+        # Use dataset-specific output directory
+        dataset_output_dir = f"{output_dir}/{dataset_name}"
+        
         if iteration is not None and iteration > 0:
             # Try to load from the specific iteration checkpoint
-            checkpoint_path = f"{output_dir}/iteration_{iteration}"
+            checkpoint_path = f"{dataset_output_dir}/iteration_{iteration}"
             if Path(checkpoint_path).exists():
                 return self._load_model_from_path(checkpoint_path, f"iteration {iteration}")
             
         # Try to find the most recent iteration checkpoint
-        iteration_dirs = [d for d in Path(output_dir).glob("iteration_*") if d.is_dir()]
+        iteration_dirs = [d for d in Path(dataset_output_dir).glob("iteration_*") if d.is_dir()]
         if iteration_dirs:
             # Sort by iteration number and get the most recent
             latest_iteration = max(iteration_dirs, key=lambda x: int(x.name.split('_')[1]))
             return self._load_model_from_path(str(latest_iteration), f"latest iteration {latest_iteration.name}")
             
         # Fall back to SFT model
-        sft_model_path = f"{output_dir}/sft/lora_model"
+        sft_model_path = f"{dataset_output_dir}/sft/lora_model"
         if Path(sft_model_path).exists():
             return self._load_model_from_path(sft_model_path, "SFT model")
             
@@ -497,6 +516,7 @@ def main():
     parser.add_argument("--val_path", default=config.data.val_data_path, help="Path to validation data")
     parser.add_argument("--test_path", default=config.data.test_data_path, help="Path to test data")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory")
+    parser.add_argument("--dataset_name", type=str, default="default", help="Dataset name for organizing models")
     parser.add_argument("--model_name", type=str, default="meta-llama/Meta-Llama-3-8b", help="Model name to use")
     parser.add_argument("--skip_reasoning_generation", default=True, action="store_true", help="Skip reasoning generation if reasoning data already exists")
     
@@ -507,6 +527,9 @@ def main():
     random.seed(config.seed)
     np.random.seed(config.seed)
     
+    # Set dataset name
+    config.dataset_name = args.dataset_name
+    
     # Create trainer
     trainer = RESTPGTrainer()
     
@@ -514,7 +537,7 @@ def main():
     # trainer.load_model(args.model_name)
     
     # Train
-    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir, args.skip_reasoning_generation)
+    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir, args.dataset_name, args.skip_reasoning_generation)
     
     # Evaluate
     results = trainer.evaluate(args.test_path)
