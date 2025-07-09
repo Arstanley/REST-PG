@@ -83,7 +83,7 @@ def main():
     # Load model
     model_name = args.model_name or config.model.model_name
     print(f"Loading model: {model_name}")
-    trainer.load_model(model_name)
+    # trainer.load_model(model_name)
     
     # Train REST-PG
     print("Starting REST-PG training...")

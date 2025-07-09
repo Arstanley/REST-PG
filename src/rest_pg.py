@@ -11,12 +11,13 @@ from transformers import (
 )
 from transformers.training_args import TrainingArguments
 from transformers.trainer import Trainer
+from transformers import DataCollatorForLanguageModeling
 from peft import (
     LoraConfig,
     get_peft_model,
     TaskType,
     PeftModel,
-    PeftMixedModel
+    PeftMixedModel,
 )
 from torch.optim.adamw import AdamW
 from tqdm import tqdm
@@ -34,7 +35,7 @@ from data_utils import PersonalizedTextDataset, ReasoningDataGenerator, calculat
 class RESTPGTrainer:
     """Main trainer for REST-PG algorithm"""
     def __init__(self):
-        self.tokenizer, self.model, self.peft_model = self.load_model(config.model.model_name)
+        self.tokenizer, self.model = self.load_model(config.model.model_name)
         self.reasoning_generator = ReasoningDataGenerator(self.model, self.tokenizer)
         
     def load_model(self, model_name): 
@@ -53,7 +54,7 @@ class RESTPGTrainer:
             model_name,
             torch_dtype=torch.float16
         )
-        model.to(device)
+        # model.to(device)
         # # Add padding token if not present
         # if tokenizer.pad_token is None:  # type: ignore
         #     tokenizer.pad_token = tokenizer.eos_token  # type: ignore
@@ -62,17 +63,18 @@ class RESTPGTrainer:
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
-            r=16,  # LoRA rank
-            lora_alpha=32,  # LoRA alpha parameter
+            r=8,  # LoRA rank
+            lora_alpha=16,  # LoRA alpha parameter
             lora_dropout=0.1,  # LoRA dropout
-            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+            target_modules=["q_proj", "v_proj"]
         )
         
         # Create PEFT model with LoRA
-        peft_model = get_peft_model(model, lora_config) # type: ignore
-        peft_model.print_trainable_parameters() # type: ignore
+        model = get_peft_model(model, lora_config) # type: ignore
+        # model.to(device)
+        model.print_trainable_parameters() # type: ignore
         
-        return tokenizer, model, peft_model
+        return tokenizer, model
 
     def generate_reasoning_dataset(self, data_path: str, output_path: str):
         """Stage 1: Generate reasoning dataset using Figure 7 prompt"""
@@ -133,7 +135,7 @@ class RESTPGTrainer:
         print("Stage 2: Supervised fine-tuning on reasoning data with LoRA...")
         
         # Ensure model is loaded
-        assert self.peft_model is not None, "LoRA model must be loaded before training"
+        assert self.model is not None, "LoRA model must be loaded before training"
         assert self.tokenizer is not None, "Tokenizer must be loaded before training"
         
         if self.tokenizer.pad_token is None:
@@ -151,38 +153,27 @@ class RESTPGTrainer:
         train_dataset = PersonalizedTextDataset(train_path, self.tokenizer)
         val_dataset = PersonalizedTextDataset(val_path, self.tokenizer)
         
-        # Setup training arguments for LoRA
-        training_args = TrainingArguments(
-            output_dir=output_dir,
-            num_train_epochs=config.training.num_epochs,
-            per_device_train_batch_size=config.training.batch_size,
-            per_device_eval_batch_size=config.training.batch_size,
-            warmup_steps=config.training.warmup_steps,
-            weight_decay=config.training.weight_decay,
-            logging_dir=f"{output_dir}/logs",
-            logging_steps=10,
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            save_total_limit=2,
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            greater_is_better=False,
-            learning_rate=config.training.learning_rate,
-            fp16=True if device == "cuda" else False,  # Use fp16 only on GPU
-            max_grad_norm=config.training.gradient_clip,
-            dataloader_pin_memory=False,
-            no_cuda=False if device == "cuda" else True,  # Force GPU usage
-        )
-        
-        # Create trainer with LoRA model
         trainer = Trainer(
-            model=self.peft_model,
-            args=training_args,
+            model=self.model,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
+            args=TrainingArguments(
+                per_device_train_batch_size=2,
+                gradient_accumulation_steps=16,
+                warmup_steps=100,
+                num_train_epochs=config.training.num_epochs,
+                learning_rate=config.training.learning_rate,
+                fp16=True,
+                logging_steps=5,
+                save_strategy="steps",
+                output_dir=output_dir,
+                save_total_limit=3,
+                optim="adamw_torch",
+                report_to='wandb' 
+            ),
+            data_collator= DataCollatorForLanguageModeling(self.tokenizer, mlm=False),
         )
-        
-        # Train the LoRA model
+        self.model.config.use_cache = False
         trainer.train()
         
         # Save the LoRA adapters
@@ -284,8 +275,8 @@ class RESTPGTrainer:
             train_dataset=dataset,
         )
         
-        # Train the LoRA model
-        trainer.train()
+        # # Train the LoRA model
+        # trainer.train()
         
         print(f"Maximization step completed. LoRA weights updated.")
         

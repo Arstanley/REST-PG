@@ -20,7 +20,7 @@ class ModelConfig:
 class TrainingConfig:
     """Training configuration settings"""
     learning_rate: float = 5e-6
-    batch_size: int = 64
+    batch_size: int = 4
     num_epochs: int = 3
     warmup_steps: int = 250
     max_steps: int = 10000
@@ -34,7 +34,7 @@ class RESTPGConfig:
     """REST-PG specific configuration"""
     # Self-training parameters
     num_iterations: int = 3
-    exploration_budget: int = 32  # Number of outputs to generate per input
+    exploration_budget: int = 5  # Number of outputs to generate per input
     reward_threshold: float = 0.3  # Threshold for selecting high-reward outputs (adjusted for ROUGE scores)
     max_outputs_per_input: int = 10  # Maximum outputs to retain per input
     

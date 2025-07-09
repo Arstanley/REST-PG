@@ -6,7 +6,8 @@ import jsonlines
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+from datasets import Dataset
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
 import numpy as np
