@@ -1,0 +1,37 @@
+  0%|▏                                                                                                                                       | 1/567 [00:21<3:18:21, 21.03s/it]Traceback (most recent call last):
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 435, in <module>
+    main()
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 424, in main
+    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir, args.skip_reasoning_generation)
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 310, in train_rest_pg
+    self.supervised_fine_tuning(reasoning_data_path, val_path, f"{output_dir}/sft")
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 142, in supervised_fine_tuning
+    trainer.train()
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/trainer.py", line 2206, in train
+    return inner_training_loop(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/trainer.py", line 2548, in _inner_training_loop
+    tr_loss_step = self.training_step(model, inputs, num_items_in_batch)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/trainer.py", line 3797, in training_step
+    self.accelerator.backward(loss, **kwargs)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/accelerate/accelerator.py", line 2553, in backward
+    loss.backward(**kwargs)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/_tensor.py", line 648, in backward
+    torch.autograd.backward(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/autograd/__init__.py", line 353, in backward
+    _engine_run_backward(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/autograd/graph.py", line 824, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+KeyboardInterrupt
+Exception ignored in atexit callback: 312
+Traceback (most recent call last):
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 54, in teardown_atexit
+    conn.teardown(hooks.exit_code)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/wandb/sdk/lib/service/service_connection.py", line 182, in teardown
+    self._router.join()
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/wandb/sdk/interface/router.py", line 75, in join
+    self._thread.join()
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/threading.py", line 1089, in join
+    self._wait_for_tstate_lock()
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/threading.py", line 1105, in _wait_for_tstate_lock
+    elif lock.acquire(block, timeout):
+KeyboardInterrupt:

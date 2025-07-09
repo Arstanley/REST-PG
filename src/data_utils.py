@@ -171,26 +171,11 @@ def create_dataset(data_path: str, tokenizer) -> Dataset:
     
     # Filter out items that don't have 'x' and 'y'
     dataset = dataset.filter(lambda x: 'x' in x and 'y' in x)
-    
-    # Format input with personalized context
-    def format_input_with_context(examples):
-        """Format input with personalized context using RAG"""
-        formatted_inputs = []
-        for i in range(len(examples['x'])):
-            prompt = examples['x'][i]
-            profile = examples.get('P', [[]])[i] if 'P' in examples else []
-            # Simple concatenation for now - can be enhanced with proper RAG
-            context = "\n".join(profile[:config.restpg.retrieval_top_k])
-            formatted_input = f"Context:\n{context}\n\nPrompt: {prompt}\n\nResponse:"
-            formatted_inputs.append(formatted_input)
-        return {'formatted_input': formatted_inputs}
-    
-    dataset = dataset.map(format_input_with_context, batched=True)
-    
+
     # Tokenize the dataset
     def tokenize_function(examples):
         inputs = tokenizer(
-            examples['formatted_input'],
+            examples['x'],
             max_length=config.model.max_input_length,
             truncation=True,
             padding='max_length',

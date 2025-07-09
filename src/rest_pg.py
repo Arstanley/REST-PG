@@ -53,8 +53,11 @@ class RESTPGTrainer:
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16
+            torch_dtype=torch.bfloat16
         )
+        
+        model.gradient_checkpointing_enable()
+
         # model.to(device)
         # # Add padding token if not present
         # if tokenizer.pad_token is None:  # type: ignore
@@ -65,7 +68,7 @@ class RESTPGTrainer:
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
             r=8,  # LoRA rank
-            lora_alpha=16,  # LoRA alpha parameter
+            lora_alpha=32,  # LoRA alpha parameter
             lora_dropout=0.1,  # LoRA dropout
             target_modules=["q_proj", "v_proj"]
         )
@@ -75,6 +78,7 @@ class RESTPGTrainer:
         # model.to(device)
         model.print_trainable_parameters() # type: ignore
         
+        torch.cuda.empty_cache()
         return tokenizer, model
 
     def generate_reasoning_dataset(self, data_path: str, output_path: str):
@@ -93,6 +97,7 @@ class RESTPGTrainer:
         """Stage 2: Supervised fine-tuning on reasoning data using LoRA"""
         print("Stage 2: Supervised fine-tuning on reasoning data with LoRA...")
         
+        torch.cuda.empty_cache()
         # Ensure model is loaded
         assert self.model is not None, "LoRA model must be loaded before training"
         assert self.tokenizer is not None, "Tokenizer must be loaded before training"
@@ -118,11 +123,12 @@ class RESTPGTrainer:
             eval_dataset=val_dataset,
             args=TrainingArguments(
                 per_device_train_batch_size=2,
-                gradient_accumulation_steps=16,
+                gradient_accumulation_steps=8,
                 warmup_steps=100,
                 num_train_epochs=config.training.num_epochs,
                 learning_rate=config.training.learning_rate,
-                fp16=True,
+                fp16=False,
+                bf16=True,
                 logging_steps=5,
                 save_strategy="steps",
                 output_dir=output_dir,
@@ -138,11 +144,23 @@ class RESTPGTrainer:
         # Save the LoRA adapters
         trainer.save_model(f"{output_dir}/lora_model")
         print(f"LoRA training completed. Model saved to {output_dir}/lora_model")
+    
+    def _cleanup_model(self):
+        """Clean up model from GPU memory to avoid CUDA OOM"""
+        if hasattr(self, 'model') and self.model is not None:
+            del self.model
+        torch.cuda.empty_cache()
+        print("Cleaned up models from GPU memory")
+
+    def expectation_step(self, data_path: str, output_dir: str = None, iteration: int = None) -> List[Dict]:
+        """Expectation step: Generate multiple outputs for each input using the last tuned model"""
         
-    def expectation_step(self, data_path: str) -> List[Dict]:
-        """Expectation step: Generate multiple outputs for each input"""
-        print("Expectation step: Generating multiple outputs...")
-        
+        if output_dir is not None:
+            if not self._load_most_recent_model(output_dir, iteration):
+                print("Warning: No tuned model found.")
+        else:
+            print("No output_dir provided, using original model for generation")
+                  
         # Load data using the data utilities
         data = load_json_data(data_path)
                 
@@ -188,9 +206,25 @@ class RESTPGTrainer:
         
         return generated_data
     
-    def maximization_step(self, generated_data: List[Dict], output_dir: str):
+    def maximization_step(self, generated_data: List[Dict], output_dir: str, iteration: int=0):
         """Maximization step: Train model on high-reward outputs using LoRA with Hugging Face datasets"""
         print("Maximization step: Training on high-reward outputs with LoRA using Hugging Face datasets...")
+        
+        # Load the previously tuned model if it exists
+        if iteration > 0:
+            # Try to load from the previous iteration checkpoint
+            prev_checkpoint = f"{output_dir}/iteration_{iteration}"
+            if Path(prev_checkpoint).exists():
+                self._load_model_from_path(prev_checkpoint, f"iteration {iteration}")
+            else:
+                print(f"Warning: Previous checkpoint not found at {prev_checkpoint}, using current model")
+        else:
+            # For the first iteration, try to load from SFT model
+            sft_model_path = f"{output_dir}/sft/lora_model"
+            if Path(sft_model_path).exists():
+                self._load_model_from_path(sft_model_path, "SFT model")
+            else:
+                print("Warning: SFT model not found, using current model for maximization step")
         
         # Create dataset from generated data
         dataset = Dataset.from_list(generated_data)
@@ -270,7 +304,7 @@ class RESTPGTrainer:
         
         # Create trainer with LoRA model
         trainer = Trainer(
-            model=self.peft_model,
+            model=self.model,
             args=training_args,
             train_dataset=dataset,
         )
@@ -308,10 +342,10 @@ class RESTPGTrainer:
             print(f"\nIteration {iteration + 1}/{config.restpg.num_iterations}")
             
             # Expectation step
-            generated_data = self.expectation_step(train_path)
+            generated_data = self.expectation_step(train_path, output_dir, iteration + 1)
             
             # Maximization step
-            self.maximization_step(generated_data, output_dir)
+            self.maximization_step(generated_data, output_dir, iteration + 1)
             
             # Save checkpoint
             checkpoint_dir = f"{output_dir}/iteration_{iteration + 1}"
@@ -321,7 +355,72 @@ class RESTPGTrainer:
             print(f"Saved checkpoint: {checkpoint_dir}")
         
         print("REST-PG training completed!")
-        
+
+        self._cleanup_model()
+    
+    def _load_most_recent_model(self, output_dir: str, iteration: int = None):
+        """Load the most recent model checkpoint"""
+        if iteration is not None and iteration > 0:
+            # Try to load from the specific iteration checkpoint
+            checkpoint_path = f"{output_dir}/iteration_{iteration}"
+            if Path(checkpoint_path).exists():
+                return self._load_model_from_path(checkpoint_path, f"iteration {iteration}")
+            
+        # Try to find the most recent iteration checkpoint
+        iteration_dirs = [d for d in Path(output_dir).glob("iteration_*") if d.is_dir()]
+        if iteration_dirs:
+            # Sort by iteration number and get the most recent
+            latest_iteration = max(iteration_dirs, key=lambda x: int(x.name.split('_')[1]))
+            return self._load_model_from_path(str(latest_iteration), f"latest iteration {latest_iteration.name}")
+            
+        # Fall back to SFT model
+        sft_model_path = f"{output_dir}/sft/lora_model"
+        if Path(sft_model_path).exists():
+            return self._load_model_from_path(sft_model_path, "SFT model")
+            
+        return False
+    
+    def _load_model_from_path(self, model_path: str, model_description: str):
+        """Load model from a specific path"""
+        try:
+            print(f"Loading {model_description} from {model_path}")
+            
+            # Clean up old model to avoid CUDA OOM
+            self._cleanup_model()
+            
+            # Load the base model and tokenizer
+            tokenizer = AutoTokenizer.from_pretrained(config.model.model_name)
+            model = AutoModelForCausalLM.from_pretrained(
+                config.model.model_name,
+                torch_dtype=torch.float16
+            )
+            
+            # Check GPU availability
+            if torch.cuda.is_available():
+                print(f"Using GPU: {torch.cuda.get_device_name()}")
+                device = "cuda"
+            else:
+                print("GPU not available, using CPU")
+                device = "cpu"
+            
+            model.to(device)
+            
+            # Load the LoRA adapters
+            from peft import PeftModel
+            peft_model = PeftModel.from_pretrained(model, model_path)
+            
+            # Update the model references
+            self.tokenizer = tokenizer
+            self.model = model
+            self.peft_model = peft_model
+            
+            print(f"Successfully loaded {model_description}")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to load {model_description} from {model_path}: {e}")
+            return False
+    
     def _format_input(self, prompt: str, profile: List[str]) -> str:
         """Format input with personalized context"""
         context = "\n".join(profile[:config.restpg.retrieval_top_k])
@@ -399,7 +498,7 @@ def main():
     parser.add_argument("--test_path", default=config.data.test_data_path, help="Path to test data")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory")
     parser.add_argument("--model_name", type=str, default="meta-llama/Meta-Llama-3-8b", help="Model name to use")
-    parser.add_argument("--skip_reasoning_generation", action="store_true", help="Skip reasoning generation if reasoning data already exists")
+    parser.add_argument("--skip_reasoning_generation", default=True, action="store_true", help="Skip reasoning generation if reasoning data already exists")
     
     args = parser.parse_args()
     

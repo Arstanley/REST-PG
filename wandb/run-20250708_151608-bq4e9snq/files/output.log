@@ -1,0 +1,36 @@
+  0%|                                                                                                               | 0/72 [00:00<?, ?it/s]Traceback (most recent call last):
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 425, in <module>
+    main()
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 414, in main
+    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir)
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 301, in train_rest_pg
+    self.supervised_fine_tuning(reasoning_data_path, val_path, f"{output_dir}/sft")
+  File "/home/colligo/REST-PG/src/rest_pg.py", line 183, in supervised_fine_tuning
+    trainer.train()
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/trainer.py", line 2206, in train
+    return inner_training_loop(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/trainer.py", line 2502, in _inner_training_loop
+    batch_samples, num_items_in_batch = self.get_batch_samples(epoch_iterator, num_batches, args.device)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/trainer.py", line 5300, in get_batch_samples
+    batch_samples.append(next(epoch_iterator))
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/accelerate/data_loader.py", line 567, in __iter__
+    current_batch = next(dataloader_iter)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 733, in __next__
+    data = self._next_data()
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 789, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 52, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/home/colligo/REST-PG/src/data_utils.py", line 138, in __getitem__
+    inputs = self.tokenizer(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/tokenization_utils_base.py", line 2855, in __call__
+    encodings = self._call_one(text=text, text_pair=text_pair, **all_kwargs)
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/tokenization_utils_base.py", line 2965, in _call_one
+    return self.encode_plus(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/tokenization_utils_base.py", line 3031, in encode_plus
+    padding_strategy, truncation_strategy, max_length, kwargs = self._get_padding_truncation_strategies(
+  File "/home/colligo/miniconda3/envs/rest-pg/lib/python3.10/site-packages/transformers/tokenization_utils_base.py", line 2751, in _get_padding_truncation_strategies
+    raise ValueError(
+ValueError: Asking to pad but the tokenizer does not have a padding token. Please select a token to use as `pad_token` `(tokenizer.pad_token = tokenizer.eos_token e.g.)` or add a new pad token via `tokenizer.add_special_tokens({'pad_token': '[PAD]'})`.

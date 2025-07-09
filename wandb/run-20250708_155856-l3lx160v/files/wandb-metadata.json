@@ -1,0 +1,47 @@
+{
+  "os":  "Linux-5.10.223-212.873.amzn2.x86_64-x86_64-with-glibc2.35",
+  "python":  "CPython 3.10.0",
+  "startedAt":  "2025-07-08T22:58:56.733202Z",
+  "program":  "/home/colligo/REST-PG/src/rest_pg.py",
+  "codePath":  "src/rest_pg.py",
+  "codePathLocal":  "src/rest_pg.py",
+  "git":  {
+    "remote":  "git@github.com:Arstanley/REST-PG.git",
+    "commit":  "924289585cb75ddab656865d15897f208f091356"
+  },
+  "email":  "xarstanley@yahoo.com",
+  "root":  "/home/colligo/REST-PG",
+  "host":  "pluto-prod-bni-reasoning-personali-1-0",
+  "executable":  "/home/colligo/miniconda3/envs/rest-pg/bin/python3",
+  "cpu_count":  48,
+  "cpu_count_logical":  96,
+  "gpu":  "NVIDIA A100-SXM4-40GB",
+  "gpu_count":  2,
+  "disk":  {
+    "/":  {
+      "total":  "80530636800",
+      "used":  "7078281216"
+    }
+  },
+  "memory":  {
+    "total":  "1204529897472"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA A100-SXM4-40GB",
+      "memoryTotal":  "42949672960",
+      "cudaCores":  6912,
+      "architecture":  "Ampere",
+      "uuid":  "GPU-82134b03-6ce8-2a20-9e6c-350b5001b9ae"
+    },
+    {
+      "name":  "NVIDIA A100-SXM4-40GB",
+      "memoryTotal":  "42949672960",
+      "cudaCores":  6912,
+      "architecture":  "Ampere",
+      "uuid":  "GPU-3a50d48f-0d39-bab7-090f-c1660eb123cd"
+    }
+  ],
+  "cudaVersion":  "12.4",
+  "writerId":  "4s15o82quh1jozt57jbh6uuv1el32yi1"
+}
