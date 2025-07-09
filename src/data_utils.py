@@ -6,7 +6,7 @@ import jsonlines
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
 import numpy as np
@@ -16,6 +16,7 @@ import jsonlines
 from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
 from rouge_score import rouge_scorer
+from datasets import Dataset, load_dataset, concatenate_datasets
 
 from config import config
 
@@ -75,6 +76,12 @@ def load_json_data(file_path: str) -> List[Dict]:
     return rest_pg_data
 
 
+def save_dataset_to_jsonl(dataset: Dataset, file_path: str):
+    """Save a Hugging Face Dataset to JSONL format"""
+    dataset.to_json(file_path)
+    print(f"Dataset saved to {file_path}")
+
+
 def save_jsonl_data(data: List[Dict], file_path: str):
     """Save data to JSONL format"""
     with jsonlines.open(file_path, 'w') as writer:
@@ -104,64 +111,186 @@ def calculate_rouge_reward(expected: str, generated: str) -> float:
         return 0.0  # Default reward if calculation fails
 
 
-class PersonalizedTextDataset(Dataset):
-    """Dataset for personalized text generation tasks"""
-
-    def __init__(self, data_path: str, tokenizer):
-        self.tokenizer = tokenizer
-        self.data = []
-        
-        # Load data with proper error handling
-        try:
-            if data_path.endswith('.json'):
-                # Load JSON data and convert to REST-PG format
-                self.data = load_json_data(data_path)
-            else:
-                # Load JSONL data
-                with jsonlines.open(data_path) as reader:
-                    self.data = [item for item in reader if isinstance(item, dict) and 'x' in item and 'y' in item]  # type: ignore
-        except Exception as e:
-            print(f"Error loading data from {data_path}: {e}")
-            self.data = []
-        
-    def __len__(self):
-        return len(self.data)
+def validate_reasoning_data(data_path: str) -> bool:
+    """Validate that existing reasoning data is in the correct format"""
+    print(f"Validating reasoning data at {data_path}")
     
-    def __getitem__(self, idx):
-        item = self.data[idx]
+    try:
+        # Load the dataset
+        if data_path.endswith('.json'):
+            dataset = Dataset.from_list(load_json_data(data_path))
+        else:
+            dataset = load_dataset('json', data_files=data_path)['train']
         
-        # Format input with personalized context
-        input_text = self._format_input(item['x'], item.get('P', []))
-        target_text = item['y']
+        # Check required columns
+        required_columns = ['x', 'y']
+        missing_columns = [col for col in required_columns if col not in dataset.column_names]
         
-        # Tokenize
-        inputs = self.tokenizer(
-            input_text,
+        if missing_columns:
+            print(f"✗ Missing required columns: {missing_columns}")
+            return False
+        
+        # Check that dataset is not empty
+        if len(dataset) == 0:
+            print("✗ Dataset is empty")
+            return False
+        
+        # Check a few examples to ensure they have the expected structure
+        sample = dataset[0]
+        if not isinstance(sample['x'], str) or not isinstance(sample['y'], str):
+            print("✗ Data format error: 'x' and 'y' should be strings")
+            return False
+        
+        # Check if reasoning is included in the output (optional)
+        if 'reasoning' in sample['y'].lower() or 'reasoning:' in sample['y']:
+            print("✓ Reasoning data appears to be properly formatted")
+        else:
+            print("⚠ Warning: Output doesn't appear to contain reasoning format")
+        
+        print(f"✓ Reasoning data validation passed: {len(dataset)} examples")
+        return True
+        
+    except Exception as e:
+        print(f"✗ Error validating reasoning data: {e}")
+        return False
+
+
+def create_dataset(data_path: str, tokenizer) -> Dataset:
+    """Create a Hugging Face Dataset from JSON or JSONL data."""
+    print(f"Loading data from {data_path} and converting to Hugging Face Dataset...")
+    
+    # Load data based on file extension
+    if data_path.endswith('.json'):
+        # Load JSON data and convert to REST-PG format
+        raw_data = load_json_data(data_path)
+        # Convert to list of dicts for Dataset creation
+        dataset = Dataset.from_list(raw_data)
+    else:
+        # Load JSONL data
+        dataset = load_dataset('json', data_files=data_path)['train']
+    
+    # Filter out items that don't have 'x' and 'y'
+    dataset = dataset.filter(lambda x: 'x' in x and 'y' in x)
+    
+    # Format input with personalized context
+    def format_input_with_context(examples):
+        """Format input with personalized context using RAG"""
+        formatted_inputs = []
+        for i in range(len(examples['x'])):
+            prompt = examples['x'][i]
+            profile = examples.get('P', [[]])[i] if 'P' in examples else []
+            # Simple concatenation for now - can be enhanced with proper RAG
+            context = "\n".join(profile[:config.restpg.retrieval_top_k])
+            formatted_input = f"Context:\n{context}\n\nPrompt: {prompt}\n\nResponse:"
+            formatted_inputs.append(formatted_input)
+        return {'formatted_input': formatted_inputs}
+    
+    dataset = dataset.map(format_input_with_context, batched=True)
+    
+    # Tokenize the dataset
+    def tokenize_function(examples):
+        inputs = tokenizer(
+            examples['formatted_input'],
             max_length=config.model.max_input_length,
             truncation=True,
             padding='max_length',
             return_tensors='pt'
         )
-        
-        targets = self.tokenizer(
-            target_text,
+        targets = tokenizer(
+            examples['y'],
             max_length=config.model.max_output_length,
             truncation=True,
             padding='max_length',
             return_tensors='pt'
         )
         
+        # Handle tensor dimensions correctly for batched processing
+        if len(examples['formatted_input']) == 1:
+            # Single example
+            return {
+                'input_ids': inputs['input_ids'].squeeze(),
+                'attention_mask': inputs['attention_mask'].squeeze(),
+                'labels': targets['input_ids'].squeeze()
+            }
+        else:
+            # Multiple examples
+            return {
+                'input_ids': inputs['input_ids'],
+                'attention_mask': inputs['attention_mask'],
+                'labels': targets['input_ids']
+            }
+    
+    dataset = dataset.map(tokenize_function, batched=True)
+    
+    print(f"Dataset created with {len(dataset)} examples.")
+    return dataset
+
+
+def create_reasoning_dataset(data_path: str, tokenizer, reasoning_generator) -> Dataset:
+    """Create a reasoning dataset using Hugging Face datasets"""
+    print("Creating reasoning dataset using Hugging Face datasets...")
+    
+    # Load the base dataset
+    base_dataset = create_dataset(data_path, tokenizer)
+    
+    # Generate reasoning for each example
+    def add_reasoning(examples):
+        reasoning_summaries = []
+        for i in range(len(examples['x'])):
+            # Format profile as concatenated documents with | separator
+            profile_text = " | ".join(examples.get('P', [[]])[i])
+            
+            # Generate reasoning using Figure 7 prompt with chat template
+            reasoning_prompt = config.restpg.reasoning_prompt_template.format(
+                profile=profile_text,
+                subject=examples['x'][i],
+                expected_output=examples['y'][i]
+            )
+            
+            reasoning_summary = reasoning_generator.generate_reasoning(reasoning_prompt)
+            reasoning_summaries.append(reasoning_summary)
+        
+        return {'reasoning_summary': reasoning_summaries}
+    
+    # Add reasoning to dataset
+    reasoning_dataset = base_dataset.map(add_reasoning, batched=True, batch_size=1)
+    
+    # Format for SFT training
+    def format_for_sft(examples):
+        sft_inputs = []
+        sft_outputs = []
+        
+        for i in range(len(examples['x'])):
+            # Format profile as concatenated documents with | separator
+            profile_text = " | ".join(examples.get('P', [[]])[i])
+            
+            # Create SFT format using Figure 8 prompt templates
+            sft_input = config.restpg.sft_input_template.format(
+                instruction=examples['x'][i],
+                context=profile_text
+            )
+            sft_output = config.restpg.sft_output_template.format(
+                reasoning_summary=examples['reasoning_summary'][i],
+                expected_output=examples['y'][i]
+            )
+            
+            sft_inputs.append(sft_input)
+            sft_outputs.append(sft_output)
+        
         return {
-            'input_ids': inputs['input_ids'].squeeze(),
-            'attention_mask': inputs['attention_mask'].squeeze(),
-            'labels': targets['input_ids'].squeeze()
+            'sft_input': sft_inputs,
+            'sft_output': sft_outputs
         }
     
-    def _format_input(self, prompt: str, profile: List[str]) -> str:
-        """Format input with personalized context using RAG"""
-        # Simple concatenation for now - can be enhanced with proper RAG
-        context = "\n".join(profile[:config.restpg.retrieval_top_k])
-        return f"Context:\n{context}\n\nPrompt: {prompt}\n\nResponse:"
+    # Format for SFT
+    sft_dataset = reasoning_dataset.map(format_for_sft, batched=True)
+    
+    # Rename columns for training
+    sft_dataset = sft_dataset.rename_column('sft_input', 'x')
+    sft_dataset = sft_dataset.rename_column('sft_output', 'y')
+    
+    print(f"Reasoning dataset created with {len(sft_dataset)} examples")
+    return sft_dataset
 
 
 class ReasoningDataGenerator:
@@ -236,9 +365,13 @@ class ReasoningDataGenerator:
 
 
 def create_data_loaders(train_path: str, val_path: str, tokenizer) -> Tuple[DataLoader, DataLoader]:
-    """Create training and validation data loaders"""
-    train_dataset = PersonalizedTextDataset(train_path, tokenizer)
-    val_dataset = PersonalizedTextDataset(val_path, tokenizer)
+    """Create training and validation data loaders using Hugging Face datasets"""
+    train_dataset = create_dataset(train_path, tokenizer)
+    val_dataset = create_dataset(val_path, tokenizer)
+    
+    # Convert to PyTorch format for DataLoader
+    train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+    val_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
     
     train_loader = DataLoader(
         train_dataset,

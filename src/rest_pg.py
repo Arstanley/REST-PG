@@ -26,9 +26,10 @@ from typing import List, Dict, Tuple, Optional, Any
 import numpy as np
 from pathlib import Path
 import random
+from datasets import Dataset
 
 from config import config
-from data_utils import PersonalizedTextDataset, ReasoningDataGenerator, calculate_rouge_reward, load_json_data, save_jsonl_data
+from data_utils import ReasoningDataGenerator, calculate_rouge_reward, load_json_data, save_jsonl_data, create_dataset, create_reasoning_dataset, save_dataset_to_jsonl, validate_reasoning_data
 
 
 class RESTPGTrainer:
@@ -75,56 +76,14 @@ class RESTPGTrainer:
         return tokenizer, model, peft_model
 
     def generate_reasoning_dataset(self, data_path: str, output_path: str):
-        """Stage 1: Generate reasoning dataset using Figure 7 prompt"""
-        print("Stage 1: Generating reasoning dataset...")
+        """Stage 1: Generate reasoning dataset using Figure 7 prompt with Hugging Face datasets"""
+        print("Stage 1: Generating reasoning dataset using Hugging Face datasets...")
         
-        # Load data using the data utilities
-        data = load_json_data(data_path)
-               
-        reasoning_data = []
-        
-        for item in tqdm(data, desc="Generating reasoning"):
-            if not isinstance(item, dict) or 'x' not in item or 'y' not in item or 'P' not in item:
-                continue
-                
-            # Format profile as concatenated documents with | separator
-            profile_text = " | ".join(item['P'])
-            
-            # Generate reasoning using Figure 7 prompt with chat template
-            reasoning_prompt = config.restpg.reasoning_prompt_template.format(
-                profile=profile_text,
-                subject=item['x'],
-                expected_output=item['y']
-            )
-            
-            reasoning_summary = self.reasoning_generator.generate_reasoning(
-                reasoning_prompt
-            )
-
-            # Create SFT format using Figure 8 prompt templates with chat template
-            sft_input = config.restpg.sft_input_template.format(
-                instruction=item['x'],
-                context=profile_text
-            )
-            sft_output = config.restpg.sft_output_template.format(
-                reasoning_summary=reasoning_summary,
-                expected_output=item['y']
-            )
-            
-            # Combine input and output for training
-            combined_input = sft_input
-            combined_output = sft_output
-            
-            reasoning_data.append({
-                'x': combined_input,
-                'y': combined_output,
-                'P': item['P'],
-                'user_id': item.get('user_id', 'unknown'),
-                'reasoning_summary': reasoning_summary
-            })
+        # Create reasoning dataset using the new function
+        reasoning_dataset = create_reasoning_dataset(data_path, self.tokenizer, self.reasoning_generator)
         
         # Save reasoning dataset
-        save_jsonl_data(reasoning_data, output_path)
+        save_dataset_to_jsonl(reasoning_dataset, output_path)
         
         print(f"Reasoning dataset saved to {output_path}")
         
@@ -148,8 +107,8 @@ class RESTPGTrainer:
             device = "cpu"
         
         # Load data
-        train_dataset = PersonalizedTextDataset(train_path, self.tokenizer)
-        val_dataset = PersonalizedTextDataset(val_path, self.tokenizer)
+        train_dataset = create_dataset(train_path, self.tokenizer)
+        val_dataset = create_dataset(val_path, self.tokenizer)
         
         # Setup training arguments for LoRA
         training_args = TrainingArguments(
@@ -239,17 +198,58 @@ class RESTPGTrainer:
         return generated_data
     
     def maximization_step(self, generated_data: List[Dict], output_dir: str):
-        """Maximization step: Train model on high-reward outputs using LoRA"""
-        print("Maximization step: Training on high-reward outputs with LoRA...")
+        """Maximization step: Train model on high-reward outputs using LoRA with Hugging Face datasets"""
+        print("Maximization step: Training on high-reward outputs with LoRA using Hugging Face datasets...")
         
-        # Create temporary dataset
-        temp_data_path = f"{output_dir}/temp_generated_data.jsonl"
-        with jsonlines.open(temp_data_path, 'w') as writer:
-            for item in generated_data:
-                writer.write(item)  # type: ignore
+        # Create dataset from generated data
+        dataset = Dataset.from_list(generated_data)
         
-        # Create dataset
-        dataset = PersonalizedTextDataset(temp_data_path, self.tokenizer)
+        # Format and tokenize the dataset
+        dataset = dataset.map(
+            lambda examples: {
+                'formatted_input': [
+                    f"Context:\n{' | '.join(examples.get('P', [[]])[i][:config.restpg.retrieval_top_k])}\n\nPrompt: {examples['x'][i]}\n\nResponse:"
+                    for i in range(len(examples['x']))
+                ]
+            },
+            batched=True
+        )
+        
+        # Tokenize
+        def tokenize_function(examples):
+            inputs = self.tokenizer(
+                examples['formatted_input'],
+                max_length=config.model.max_input_length,
+                truncation=True,
+                padding='max_length',
+                return_tensors='pt'
+            )
+            targets = self.tokenizer(
+                examples['y'],
+                max_length=config.model.max_output_length,
+                truncation=True,
+                padding='max_length',
+                return_tensors='pt'
+            )
+            
+            # Handle tensor dimensions correctly for batched processing
+            if len(examples['formatted_input']) == 1:
+                # Single example
+                return {
+                    'input_ids': inputs['input_ids'].squeeze(),
+                    'attention_mask': inputs['attention_mask'].squeeze(),
+                    'labels': targets['input_ids'].squeeze()
+                }
+            else:
+                # Multiple examples
+                return {
+                    'input_ids': inputs['input_ids'],
+                    'attention_mask': inputs['attention_mask'],
+                    'labels': targets['input_ids']
+                }
+        
+        dataset = dataset.map(tokenize_function, batched=True)
+        dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
         
         # Check GPU availability
         if torch.cuda.is_available():
@@ -289,18 +289,27 @@ class RESTPGTrainer:
         
         print(f"Maximization step completed. LoRA weights updated.")
         
-        # Clean up
-        Path(temp_data_path).unlink()
-        
-    def train_rest_pg(self, train_path: str, val_path: str, output_dir: str):
+    def train_rest_pg(self, train_path: str, val_path: str, output_dir: str, skip_reasoning_generation: bool = False):
         """Complete REST-PG training pipeline"""
         print("Starting REST-PG training pipeline...")
         
-        # Stage 1: Generate reasoning dataset
+        # Stage 1: Generate reasoning dataset (skip if already exists)
         reasoning_data_path = f"{output_dir}/reasoning_data.jsonl"
-        # self.generate_reasoning_dataset(train_path, reasoning_data_path)
+        
+        if skip_reasoning_generation:
+            print("Skipping reasoning generation - using existing reasoning data")
+            if not Path(reasoning_data_path).exists():
+                raise FileNotFoundError(f"Reasoning data not found at {reasoning_data_path}. Set skip_reasoning_generation=False to generate it.")
+            
+            # Validate the existing reasoning data
+            if not validate_reasoning_data(reasoning_data_path):
+                raise ValueError(f"Invalid reasoning data format at {reasoning_data_path}")
+        else:
+            print("Stage 1: Generating reasoning dataset...")
+            self.generate_reasoning_dataset(train_path, reasoning_data_path)
         
         # Stage 2: Supervised fine-tuning on reasoning data
+        print("Stage 2: Supervised fine-tuning on reasoning data...")
         self.supervised_fine_tuning(reasoning_data_path, val_path, f"{output_dir}/sft")
         
         # Stage 3: Expectation-Maximization self-training
@@ -399,6 +408,7 @@ def main():
     parser.add_argument("--test_path", default=config.data.test_data_path, help="Path to test data")
     parser.add_argument("--output_dir", type=str, default="outputs", help="Output directory")
     parser.add_argument("--model_name", type=str, default="meta-llama/Meta-Llama-3-8b", help="Model name to use")
+    parser.add_argument("--skip_reasoning_generation", action="store_true", help="Skip reasoning generation if reasoning data already exists")
     
     args = parser.parse_args()
     
@@ -414,7 +424,7 @@ def main():
     # trainer.load_model(args.model_name)
     
     # Train
-    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir)
+    trainer.train_rest_pg(args.train_path, args.val_path, args.output_dir, args.skip_reasoning_generation)
     
     # Evaluate
     results = trainer.evaluate(args.test_path)
