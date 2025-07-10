@@ -30,8 +30,8 @@ import random
 from datasets import Dataset
 import os
 
-from config import config
-from data_utils import ReasoningDataGenerator, calculate_rouge_reward, load_json_data, save_jsonl_data, create_dataset, create_reasoning_dataset, save_dataset_to_jsonl, validate_reasoning_data
+from src.config import config
+from src.data_utils import ReasoningDataGenerator, calculate_rouge_reward, load_json_data, save_jsonl_data, create_dataset, create_reasoning_dataset, save_dataset_to_jsonl, validate_reasoning_data
 
 
 class RESTPGTrainer:
@@ -123,7 +123,7 @@ class RESTPGTrainer:
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             args=TrainingArguments(
-                per_device_train_batch_size=2,
+                per_device_train_batch_size=1,
                 gradient_accumulation_steps=8,
                 warmup_steps=100,
                 num_train_epochs=config.training.num_epochs,
@@ -319,7 +319,7 @@ class RESTPGTrainer:
         
         print(f"Maximization step completed. LoRA weights updated.")
         
-    def train_rest_pg(self, train_path: str, val_path: str, output_dir: str, dataset_name: str = None, skip_reasoning_generation: bool = False):
+    def train_rest_pg(self, train_path: str, val_path: str, output_dir: str, dataset_name: str = None, skip_reasoning_generation: bool = True):
         """Complete REST-PG training pipeline"""
         print("Starting REST-PG training pipeline...")
         

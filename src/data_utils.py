@@ -18,7 +18,7 @@ import numpy as np
 from rouge_score import rouge_scorer
 from datasets import Dataset, load_dataset, concatenate_datasets
 
-from config import config
+from src.config import config
 
 
 def load_json_data(file_path: str) -> List[Dict]:
@@ -190,7 +190,7 @@ def create_dataset(data_path: str, tokenizer) -> Dataset:
         )
         
         # Handle tensor dimensions correctly for batched processing
-        if len(examples['formatted_input']) == 1:
+        if len(examples['x']) == 1:
             # Single example
             return {
                 'input_ids': inputs['input_ids'].squeeze(),
